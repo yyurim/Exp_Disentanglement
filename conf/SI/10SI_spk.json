@@ -1,0 +1,12 @@
+{
+    "baseline":"test_spk/final_enc.pt",
+    "model_type": "VAE3",
+    "REC": 1,
+    "KL": 0.2,
+    "SI": 0.12,
+    "I": 0,
+    "LI": 0,
+    "AC": 0,
+    "CC": 0,
+    "SC": 0
+}
