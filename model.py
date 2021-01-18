@@ -47,7 +47,6 @@ class CIN_2d(nn.Module):
 
         return norm_x
 
-#   VAE layer in ACVAE
 class Conv2d_GLU(nn.Module):
     def __init__(self, *args, **kwargs):
         super(Conv2d_GLU, self).__init__()
@@ -82,49 +81,47 @@ class Conv2d_GLU(nn.Module):
         out = torch.mul(h1, self.sig(h2))        
         return out
 
-#   Weight sharing : speaker vector
 class DummyLayer(nn.Module):
     def __init__(self, *args, **kwargs):
         super(DummyLayer, self).__init__()
         spk_num = kwargs.get("spk_num", 0)
 
-        self.dummy = nn.Conv1d(spk_num, 1, kernel_size=1, stride=1)
+        # self.dummy = nn.Conv1d(spk_num, 1, kernel_size=1, stride=1)
+        self.dummy = nn.Linear(spk_num,1,bias=False)
+        self.act = nn.ReLU()
 
     def forward(self, spk_vec):
-        out = torch.sigmoid(self.dummy(spk_vec))
+        out = self.act(self.dummy(spk_vec))
         return out
 
-#   concate spk vec to latent space 
 def attach_style(inputs, style):
     style = style.view(style.size(0), style.size(1), 1, 1)
     style = style.repeat(1, 1, inputs.size(2), inputs.size(3))
     inputs_bias_added = torch.cat([style, inputs], dim=1)
     return inputs_bias_added
 
-#   random sampling
 def reparameterize(mu, logvar):
     std = torch.exp(0.5*logvar)
     eps = torch.randn_like(std)
     return eps.mul(std).add(mu)
 
-#   VAE encoder
 class Encoder(nn.Module):
 
     def __init__(self, *args, **kwargs):
         super(Encoder, self).__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        self.style_dim = kwargs.get("style_dim", 0)             # the number of speakers
-        self.latent_dim = kwargs.get("latent_dim", 8)           # latent space dimension
-        self.vae_type = kwargs.get("vae_type", '')              # VAE type
+        self.style_dim = kwargs.get("style_dim", 0)
+        self.latent_dim = kwargs.get("latent_dim", 8)
+        self.vae_type = kwargs.get("vae_type", '')
 
         assert self.vae_type in ['VAE1', 'VAE2', 'VAE3', 'MD'], "VAE type error"
 
-        # ACVAE type 1
         """
         (1, 36, 128) => (5, 36, 128) => (10, 18, 64) => (10, 9, 32) => (16, 1, 32)
         (k-s)/2 = p
         """
+    
         C_structure = [5, 10, 10, self.latent_dim]
         k_structure = [(3,9), (4,8), (4,8), (9,5)]
         s_structure = [(1,1), (2,2), (2,2), (9,1)]
@@ -134,9 +131,12 @@ class Encoder(nn.Module):
         inC = 1
         
         self.convs= nn.ModuleList([])
-        self.dummy4ws = DummyLayer(spk_num=self.style_dim)      # for weight sharing
+        if self.vae_type in ['VAE3', 'MD']:
+            self.dummy4ws = DummyLayer(spk_num=self.style_dim)
 
         for layer_idx in range(layer_num):
+            if self.vae_type in ['VAE3', 'MD']:
+                inC += 1
             outC = C_structure[layer_idx]
             k = k_structure[layer_idx]
             s = s_structure[layer_idx]
@@ -151,16 +151,17 @@ class Encoder(nn.Module):
                 )
                 inC = outC
                 
-    def forward(self, x, style=None, one_hot=None):
+    def forward(self, x, one_hot=None):
         h = x
-
-        # weight sharing
         if self.vae_type in ['VAE3', 'MD']:
-            h = h+self.dummy4ws(one_hot)
+            ws = self.dummy4ws(one_hot)
+            h = attach_style(h,ws)
+
         for i, conv in enumerate(self.convs):    
             h = conv(h)
             if self.vae_type in ['VAE3', 'MD']:
-                h = h+self.dummy4ws(one_hot)
+                ws = self.dummy4ws(one_hot)
+                h = attach_style(h,ws)
             
         h_mu = self.conv_mu(h)
         h_logvar = self.conv_logvar(h)
@@ -168,19 +169,18 @@ class Encoder(nn.Module):
      
         return h_mu, h_logvar, o
 
-#   VAE decoder
+
 class Decoder(nn.Module):
     def __init__(self, *args, **kwargs):
         super(Decoder, self).__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        self.style_dim = kwargs.get("style_dim", 0)             # the number of speakers
-        self.latent_dim = kwargs.get("latent_dim", 8)           # latent space dimension
-        self.vae_type = kwargs.get("vae_type", '')              # VAE type
+        self.style_dim = kwargs.get("style_dim", 0)
+        self.latent_dim = kwargs.get("latent_dim", 8)
+        self.vae_type = kwargs.get("vae_type", '')
 
         assert self.vae_type in ['VAE1', 'VAE2', 'VAE3', 'MD'], "VAE type error"
 
-        # ACVAE type 1
         """
         (8, 1, 32) => (10, 9, 32) => (10, 18, 64) => (5, 36, 128) => (1, 36, 128)
         (k-s)/2 = p
@@ -193,7 +193,8 @@ class Decoder(nn.Module):
 
         inC = self.latent_dim
         self.convs= nn.ModuleList([])
-        self.dummy4ws = DummyLayer(spk_num=self.style_dim)      # for weight sharing
+        if self.vae_type in ['VAE3', 'MD']:
+            self.dummy4ws = DummyLayer(spk_num=self.style_dim)
 
         if self.vae_type in ['VAE1', 'VAE2', 'VAE3']:
             inC += self.style_dim
@@ -214,19 +215,22 @@ class Decoder(nn.Module):
                     Conv2d_GLU(inC=inC, outC=outC, k=k, s=s, p=p, transpose=True)
                 )
             inC = outC
+            if self.vae_type in ['VAE2', 'VAE3']:
+                inC += 1
 
     
-    def forward(self, x, style=None, one_hot=None):
+    def forward(self, x, one_hot=None):
         h = x
         # concate latent
         if self.vae_type in ['VAE1', 'VAE2', 'VAE3']:
-            h = attach_style(h, style)
+            h = attach_style(h, one_hot)
         
-        # weight sharing
+        # ws
         for i, conv in enumerate(self.convs):
             h = conv(h)
             if self.vae_type in ['VAE2', 'VAE3']:
-                h = h+self.dummy4ws(one_hot)
+                ws = self.dummy4ws(one_hot)
+                h = attach_style(h, ws)
 
         h_mu = self.conv_mu(h)
         h_logvar = self.conv_logvar(h)
@@ -294,8 +298,7 @@ class Discriminator(nn.Module):
         # o = torch.sigmoid(o)
 
         return o
-
-#   SI    
+     
 class LatentClassifier(nn.Module):
     def __init__(self, *args, **kwargs):
         """
@@ -331,7 +334,6 @@ class LatentClassifier(nn.Module):
 
         return o
 
-#   AC : Auxiliary Classifier
 class DataClassifier(nn.Module):
     def __init__(self, *args, **kwargs):
         """
@@ -397,5 +399,33 @@ class LangClassifier(nn.Module):
         o = o.permute(0, 3, 1, 2).squeeze(3)
 
         return o
+
+class VAE(nn.Module):
+    def __init__(self, *args, **kwargs):
+        super(VAE, self).__init__()
+        self.style_dim = kwargs.get("style_dim", 0)
+        self.latent_dim = kwargs.get("latent_dim", 8)
+        self.vae_type = kwargs.get("vae_type", '')
+        self.disentanglement = kwargs.get("disentanglement",'')
+
+        self.enc = Encoder(style_dim=self.style_dim, latent_dim=self.latent_dim,vae_type=self.vae_type)
+        self.dec = Decoder(style_dim=self.style_dim, latent_dim=self.latent_dim,vae_type=self.vae_type)
+
+
+    def forward(self, x, one_hot_src, one_hot_tar, is_SC=False, is_CC=False):
+        z_mu, z_logvar, z = self.enc(x=x, one_hot=one_hot_src)
+        y_prime_mu, y_prime_logvar, y_prime = self.dec(x=z, one_hot=one_hot_tar)
+
+        if is_SC or is_CC:
+            y_z_mu, y_z_logvar, y_z = self.enc(x=y_prime, one_hot=one_hot_tar)
+            
+            if is_CC:
+                x_prime_mu, x_prime_logvar, x_prime = self.dec(x=y_z, one_hot=one_hot_src)
+                
+                return y_z_mu, y_z_logvar, y_z, x_prime_mu, x_prime_logvar, x_prime
+
+            return z, y_z
+        
+        return z_mu, z_logvar, z, y_prime_mu, y_prime_logvar, y_prime
 
 
