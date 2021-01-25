@@ -114,6 +114,7 @@ class Encoder(nn.Module):
         self.style_dim = kwargs.get("style_dim", 0)
         self.latent_dim = kwargs.get("latent_dim", 8)
         self.vae_type = kwargs.get("vae_type", '')
+        self.weight_sharing = kwargs.get("weight_sharing", True)
 
         assert self.vae_type in ['VAE1', 'VAE2', 'VAE3', 'MD'], "VAE type error"
 
@@ -131,12 +132,16 @@ class Encoder(nn.Module):
         inC = 1
         
         self.convs= nn.ModuleList([])
-        if self.vae_type in ['VAE3', 'MD']:
+        if self.vae_type in ['VAE3', 'MD'] and self.weight_sharing:
             self.dummy4ws = DummyLayer(spk_num=self.style_dim)
 
         for layer_idx in range(layer_num):
             if self.vae_type in ['VAE3', 'MD']:
-                inC += 1
+                if self.weight_sharing:
+                    inC += 1
+                else:
+                    inC += self.style_dim
+
             outC = C_structure[layer_idx]
             k = k_structure[layer_idx]
             s = s_structure[layer_idx]
@@ -154,14 +159,20 @@ class Encoder(nn.Module):
     def forward(self, x, one_hot=None):
         h = x
         if self.vae_type in ['VAE3', 'MD']:
-            ws = self.dummy4ws(one_hot)
-            h = attach_style(h,ws)
+            if self.weight_sharing:
+                ws = self.dummy4ws(one_hot)
+                h = attach_style(h,ws)
+            else:
+                h = attach_style(h,one_hot)
 
         for i, conv in enumerate(self.convs):    
             h = conv(h)
             if self.vae_type in ['VAE3', 'MD']:
-                ws = self.dummy4ws(one_hot)
-                h = attach_style(h,ws)
+                if self.weight_sharing:
+                    ws = self.dummy4ws(one_hot)
+                    h = attach_style(h,ws)
+                else:
+                    h = attach_style(h,one_hot)
             
         h_mu = self.conv_mu(h)
         h_logvar = self.conv_logvar(h)
@@ -178,6 +189,7 @@ class Decoder(nn.Module):
         self.style_dim = kwargs.get("style_dim", 0)
         self.latent_dim = kwargs.get("latent_dim", 8)
         self.vae_type = kwargs.get("vae_type", '')
+        self.weight_sharing = kwargs.get("weight_sharing", True)
 
         assert self.vae_type in ['VAE1', 'VAE2', 'VAE3', 'MD'], "VAE type error"
 
@@ -193,12 +205,11 @@ class Decoder(nn.Module):
 
         inC = self.latent_dim
         self.convs= nn.ModuleList([])
-        if self.vae_type in ['VAE3', 'MD']:
+        if self.vae_type in ['VAE3', 'MD'] and self.weight_sharing:
             self.dummy4ws = DummyLayer(spk_num=self.style_dim)
 
         if self.vae_type in ['VAE1', 'VAE2', 'VAE3']:
             inC += self.style_dim
-
 
         for layer_idx in range(layer_num):
             outC = C_structure[layer_idx]
@@ -216,8 +227,10 @@ class Decoder(nn.Module):
                 )
             inC = outC
             if self.vae_type in ['VAE2', 'VAE3']:
-                inC += 1
-
+                if self.weight_sharing:
+                    inC += 1
+                else:
+                    inC += self.style_dim
     
     def forward(self, x, one_hot=None):
         h = x
@@ -229,8 +242,11 @@ class Decoder(nn.Module):
         for i, conv in enumerate(self.convs):
             h = conv(h)
             if self.vae_type in ['VAE2', 'VAE3']:
-                ws = self.dummy4ws(one_hot)
-                h = attach_style(h, ws)
+                if self.weight_sharing:
+                    ws = self.dummy4ws(one_hot)
+                    h = attach_style(h,ws)
+                else:
+                    h = attach_style(h,one_hot)
 
         h_mu = self.conv_mu(h)
         h_logvar = self.conv_logvar(h)
@@ -407,9 +423,10 @@ class VAE(nn.Module):
         self.latent_dim = kwargs.get("latent_dim", 8)
         self.vae_type = kwargs.get("vae_type", '')
         self.disentanglement = kwargs.get("disentanglement",'')
+        self.weight_sharing = kwargs.get("weight_sharing",True)
 
-        self.enc = Encoder(style_dim=self.style_dim, latent_dim=self.latent_dim,vae_type=self.vae_type)
-        self.dec = Decoder(style_dim=self.style_dim, latent_dim=self.latent_dim,vae_type=self.vae_type)
+        self.enc = Encoder(style_dim=self.style_dim, latent_dim=self.latent_dim,vae_type=self.vae_type, weight_sharing=self.weight_sharing)
+        self.dec = Decoder(style_dim=self.style_dim, latent_dim=self.latent_dim,vae_type=self.vae_type, weight_sharing=self.weight_sharing)
 
 
     def forward(self, x, one_hot_src, one_hot_tar, is_SC=False, is_CC=False):

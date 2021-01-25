@@ -1,5 +1,5 @@
 import os
-
+import librosa
 from preprocess_tools import *
 
 speaker_list = ['VCC2SF1','VCC2SF2','VCC2SM1','VCC2SM2'] 
@@ -11,8 +11,6 @@ sampling_rate = 22050
 num_mcep = 36
 frame_period = 5.0
 n_frames = 128
-
-
 
 
 # train/VCC2SF1 =
@@ -51,13 +49,14 @@ for speaker in speaker_list:
                 coded_sp = coded_sp[:frame_num]
                 f0 = f0[:frame_num]
                 ap = ap[:frame_num]
+                sp = sp[:frame_num]
 
                 if dtype=="train" and int(utt_id) not in dev_list:
                         # train
                         train_f0s.append(f0)
                         train_sps.append(coded_sp.T)
                 else:
-                    non_train_dict[utt_id] = (coded_sp.T, f0, ap)
+                    non_train_dict[utt_id] = (sp.T, coded_sp.T, f0, ap)
 
         os.system("rm flist.txt")
 
@@ -71,9 +70,9 @@ for speaker in speaker_list:
         else:
             data_dir = os.path.join('data', 'test', speaker)
 
-        for utt_id, (sp, f0, ap) in non_train_dict.items():
-            new_sp = (sp-sps_mean) / sps_std
-            save_pickle(os.path.join(data_dir, '{}.p'.format(utt_id)), (new_sp, f0, ap))
+        for utt_id, (sp, coded_sp, f0, ap) in non_train_dict.items():
+            new_sp = (coded_sp-sps_mean) / sps_std
+            save_pickle(os.path.join(data_dir, '{}.p'.format(utt_id)), (sp, new_sp, f0, ap))
         
  
 

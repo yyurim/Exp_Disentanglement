@@ -50,7 +50,7 @@ for root, dirs, file_list in os.walk(dev_path):
                     continue
                 sp_path = os.path.join(dev_path,spk_id,dev_id+".p")
                 with open(sp_path, 'rb') as f:
-                    feat_mat, f0, ap = pk.load(f)
+                    _, feat_mat, f0, ap = pk.load(f)
 
                 x = torch.Tensor(feat_mat).float().cuda().permute(1,0)
                 with torch.no_grad():
@@ -58,6 +58,7 @@ for root, dirs, file_list in os.walk(dev_path):
                 result = result.detach().cpu().numpy()
                 ppg = result - prior
                 ppg_list.append(ppg.T)
+
 
             ppg_path = os.path.join(dev_path,spk_id,"ppg36.p")
             with open(ppg_path, 'wb') as f:

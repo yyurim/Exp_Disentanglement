@@ -39,6 +39,7 @@ def sample_train_data(sp_list, n_frames=128, shuffle=False, ppg_list=None):
 
     sp_mat_list = []
     target_list = []
+
     for idx in feat_idxs:
         cur_data = sp_list[idx]
         cur_data_frames = cur_data.shape[-1]
@@ -49,7 +50,6 @@ def sample_train_data(sp_list, n_frames=128, shuffle=False, ppg_list=None):
         # start_idx = np.random.randint(cur_data_frames - n_frames)
         end_idx = start_idx + n_frames
 
-        
         cur_sp_mat = cur_data[:, start_idx:end_idx]
         sp_mat_list.append(cur_sp_mat)
         if ppg_list is not None:
@@ -57,6 +57,52 @@ def sample_train_data(sp_list, n_frames=128, shuffle=False, ppg_list=None):
             cur_ppg_mat = cur_ppg[:, start_idx:end_idx]
             cur_target = extract_target_from_ppg(cur_ppg_mat, window=4)
             target_list.append(cur_target)
+
+    result = np.array(sp_mat_list)
+    targets = None if ppg_list == None else np.array(target_list)
+    return result, targets
+
+
+def multiple_sample_train_data(sp_list, n_frames=128, shuffle=False, ppg_list=None):
+    """
+    Input: [(D, T1), (D, T2), ... ]
+    Output: [(D, 128), (D, 128), ... ]
+    """
+
+    total_num = len(sp_list)
+    feat_idxs = np.arange(total_num)
+    if shuffle:
+        np.random.shuffle(feat_idxs)
+
+    sp_mat_list = []
+    target_list = []
+
+    for idx in feat_idxs:
+        cur_data = sp_list[idx]
+        cur_data_frames = cur_data.shape[-1]
+        
+        assert cur_data_frames >= n_frames, "Too short SP"
+
+        cur_sp_mat = []
+        cur_target = []
+        for seg_idx in range(0,cur_data_frames,n_frames):
+            start_idx = seg_idx
+            end_idx = seg_idx+n_frames
+
+            if end_idx >= cur_data_frames:
+                break
+
+            cur_sp_mat.append(cur_data[:, start_idx:end_idx])
+
+            if ppg_list is not None:
+                cur_ppg = ppg_list[idx]
+                cur_ppg_mat = cur_ppg[:, start_idx:end_idx]
+                cur_target.append(extract_target_from_ppg(cur_ppg_mat, window=4))
+                
+
+        sp_mat_list.extend(cur_sp_mat)
+        if ppg_list is not None:
+            target_list.extend(cur_target)
 
     result = np.array(sp_mat_list)
     targets = None if ppg_list == None else np.array(target_list)
@@ -131,13 +177,9 @@ def feat_loader_single(sp_dict, batch_size, n_frames=128, shuffle=False, ppg_dic
     total_num = len(total_feat)
     total_idxs = np.arange(total_num)
 
-    # # for src one hot
-    # src_idxs = [spk_idx for spk_idx, _ in total_feat]
-
     if shuffle:
         np.random.shuffle(total_idxs)
 
-    # generate different data seq between src and tar
     if is_AC:
         np.random.shuffle(total_idxs)
     
@@ -145,26 +187,16 @@ def feat_loader_single(sp_dict, batch_size, n_frames=128, shuffle=False, ppg_dic
         end_idx = start_idx + batch_size
         index_list = total_idxs[start_idx:end_idx]
 
-        # for src one hot
         spk_idxs = []
 
         x=[]
         t=[]
-
-        # tar_idxs = []
 
         for cur_idx in index_list:
             spk_idx, sp = total_feat[cur_idx]
 
             spk_idxs.append(spk_idx)
             x.append(sp)
-
-            # tar_idx = np.random.randint(TOTAL_SPK_NUM)
-
-            # if tar_idx == src_idx:
-            #     tar_idxs.append(TOTAL_SPK_NUM-1 -src_idx)
-            # else:
-            #     tar_idxs.append(tar_idx)
             
             if ppg_dict is not None:
                 t.append(total_ppgs[cur_idx])
@@ -177,12 +209,139 @@ def feat_loader_single(sp_dict, batch_size, n_frames=128, shuffle=False, ppg_dic
             t = torch.Tensor(t).long().cuda()
             x = (x, t)
         
-        # yield src_idxs, x, tar_idxs
         yield spk_idxs, x
 
 
+def feat_loader_multiple(sp_dict, batch_size, n_frames=128, shuffle=False, ppg_dict=None, is_AC=False):
+    TOTAL_SPK_NUM = len(sp_dict)
+    total_feat = []
+    total_ppgs = []
 
-# 
+    for spk_idx, (spk_id, sp_list) in enumerate(sp_dict.items()):
+        ppg_list = None if ppg_dict == None else ppg_dict[spk_id]
+        sampled_sp, targets = multiple_sample_train_data(sp_list, n_frames=n_frames, ppg_list=ppg_list)
+
+        spk_sp_idxs_num = len(sampled_sp)
+        spk_sp_idxs = np.arange(spk_sp_idxs_num)
+
+        np.random.shuffle(spk_sp_idxs)
+
+        # minimum 291
+        spk_sp_idxs = spk_sp_idxs[:200]
+        for i in spk_sp_idxs:
+            total_feat.append(
+                (spk_idx, sampled_sp[i])
+            )
+
+            if ppg_list is not None:
+                total_ppgs.append(targets[i])
+    
+    
+    total_num = len(total_feat)
+    sp_per_spk = total_num//TOTAL_SPK_NUM
+
+    total_idxs = np.arange(total_num)
+    total_idxs_shuffled = np.arange(total_num)
+
+    spk_sp_idx = []
+    for spk in range(TOTAL_SPK_NUM):
+        s = spk * sp_per_spk
+        e = s + sp_per_spk
+        np.random.shuffle(total_idxs_shuffled[s:e])
+        spk_sp_idx.append(total_idxs_shuffled[s:e])
+
+
+    tar_sp_idx = []
+    for spk in range(TOTAL_SPK_NUM):
+        for i in range(sp_per_spk):
+            tar_sp_idx_pt = []
+            for tar in range(TOTAL_SPK_NUM):
+                if tar == spk:
+                    continue
+                tar_sp_idx_pt.append(spk_sp_idx[tar][i])
+
+            tar_sp_idx.append(tar_sp_idx_pt)
+
+
+    total_pairs = []
+    for i in range(total_num):
+        src = total_idxs[i]
+        tars = tar_sp_idx[i]
+        total_pairs.append([src,tars])
+    
+    if shuffle:
+        np.random.shuffle(total_pairs)
+
+    
+    for start_idx in range(0, total_num, batch_size):
+        end_idx = start_idx + batch_size
+        pairs = total_pairs[start_idx:end_idx]
+
+        # for src one hot
+        src_idxs = []
+
+        src_x=[]
+        src_t=[]
+
+        tar_idxs = []
+
+        tar_x=[]
+        tar_t=[]
+
+        for src, targets in pairs:
+
+            src_idx, src_sp = total_feat[src]
+
+            src_idxs.append(src_idx)
+            src_x.append(src_sp)
+
+            if ppg_dict is not None:
+                src_t.append(total_ppgs[src])
+
+            tar_idxs_pt = []
+
+            tar_x_pt = []
+            tar_t_pt = []
+
+            for tar in targets:
+                tar_idx, tar_sp = total_feat[tar]
+
+                tar_idxs_pt.append(tar_idx)
+                tar_x_pt.append(tar_sp)
+        
+                if ppg_dict is not None:
+                    tar_t_pt.append(total_ppgs[tar])
+            
+            tar_idxs.append(tar_idxs_pt)
+
+            tar_x.append(tar_x_pt)
+            tar_t.append(tar_t_pt)
+
+        # post processing
+        src_x = np.expand_dims(src_x, axis=1)
+        src_x = torch.Tensor(src_x).float().cuda()
+        # print(src_x.shape)
+
+
+        tar_idxs = list(np.array(tar_idxs).swapaxes(0,1))
+        tar_x = np.expand_dims(tar_x, axis=1)
+        tar_x = torch.Tensor(tar_x).float().cuda()
+        tar_x = tar_x.permute(2,0,1,3,4)
+        # print(tar_x.shape)
+
+        if ppg_dict is not None:
+            src_t = torch.Tensor(src_t).long().cuda()
+            src_x = (src_x, src_t)
+
+            # tar_t = torch.Tensor(tar_t).long().cuda()
+            # tar_t = tar_t.permute(2,0,1,3,4)
+
+            # tar_x = (tar_x, tar_t)
+        
+        yield src_idxs, src_x, tar_idxs, tar_x
+
+
+
 def feat_loader_pair(sp_dict, batch_size, n_frames=128, shuffle=False, ppg_dict=None,is_MD=False):
     """
     spk_labs: list of ints [int, int, int, ...]
@@ -234,8 +393,6 @@ def feat_loader_pair(sp_dict, batch_size, n_frames=128, shuffle=False, ppg_dict=
         src = total_idxs[i]
         tars = tar_sp_idx[i]
         total_pairs.append([src,tars])
-    
-
     
     if shuffle:
         np.random.shuffle(total_pairs)
