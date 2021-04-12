@@ -387,7 +387,6 @@ def feat_loader_pair(sp_dict, batch_size, n_frames=128, shuffle=False, ppg_dict=
 
             tar_sp_idx.append(tar_sp_idx_pt)
 
-
     total_pairs = []
     for i in range(total_num):
         src = total_idxs[i]

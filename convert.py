@@ -31,10 +31,25 @@ def pitch_conversion(f0, mean_log_src, std_log_src, mean_log_target, std_log_tar
 
     return f0_normalized_t
 
-spk_list = ["VCC2SF1", "VCC2SF2", "VCC2SM1", "VCC2SM2"]
+parser = argparse.ArgumentParser()
+parser.add_argument('--mode',default='test')
+parser.add_argument('--model_type', default='')
+parser.add_argument('--model_path', default='')
+parser.add_argument('--convert_path', default='')
+parser.add_argument('--epoch', type=int, default=0)
+parser.add_argument('--disentanglement',type=str,default='')
+parser.add_argument('--ws',type=int,default=1)
+parser.add_argument('--spk',type=str,default='')
+args = parser.parse_args()
+
+if args.spk != '': 
+    spk_list = ['VCC2SF1','VCC2SF2','VCC2SM1','VCC2SM2','VCC2SF3','VCC2SF4','VCC2SM3','VCC2SM4'] 
+else:
+    spk_list = ["VCC2SF1", "VCC2SF2", "VCC2SM1", "VCC2SM2"]
 # spk_list = ['F1','M1','F2','M2']
 #spk_list = ['F1', 'M1', 'F2', 'M2', 'M3', 'F3', 'M4', 'F4', 'F5', 'M5', 'F6', 'M6', 'M7', 'F7', 'F8', 'M8', 'M9', 'F9', 'M10', 'F10', 'M11', 'F11', 'M12', 'F12', 'F13', 'M13', 'F14', 'M14', 'M15', 'F15', 'F16', 'M16', 'M17', 'F17', 'F18', 'M18', 'F19', 'M19', 'M20', 'F20', 'F21', 'M21', 'F22', 'M22', 'M23', 'F23', 'F24', 'M24', 'M25', 'F25', 'F26', 'M26', 'M27', 'F27', 'F28', 'M28', 'F29', 'M29', 'F30', 'M30', 'F31', 'M31', 'F32', 'M32', 'M33', 'F33', 'M34', 'F34', 'M35', 'F35', 'F36', 'M36', 'M37', 'F37', 'M38', 'F38', 'M39', 'F39', 'F40', 'M40', 'F41', 'M41', 'M42', 'F42', 'F43', 'M43', 'F44', 'M44', 'F45', 'M45', 'F46', 'M46', 'F47', 'M47', 'M48', 'F48', 'F49', 'M49', 'F50', 'M50', 'M51', 'F51', 'F52', 'M52', 'F53', 'M53', 'F54', 'M54', 'M55', 'F55', 'M56', 'F56']
 TOTAL_SPK_NUM = len(spk_list)
+print("TOTAL SPK NUM >> ",TOTAL_SPK_NUM)
 
 SPK_DICT = {
     spk_idx:spk_id 
@@ -45,18 +60,7 @@ VEC_DICT = {
     for spk_idx, spk_id in SPK_DICT.items()
 }
 
-parser = argparse.ArgumentParser()
-parser.add_argument('--mode',default='test')
-parser.add_argument('--model_type', default='')
-parser.add_argument('--model_path', default='')
-parser.add_argument('--convert_path', default='')
-parser.add_argument('--epoch', type=int, default=0)
-parser.add_argument('--disentanglement',type=str,default='')
-parser.add_argument('--ws',type=int,default=1)
-args = parser.parse_args()
-
 mode = args.mode
-assert mode in ['train4eval','test']
 
 model_dir = args.model_path
 if args.convert_path=='':
@@ -64,9 +68,9 @@ if args.convert_path=='':
 else:
     convert_path = args.convert_path
     
-os.makedirs(convert_path+"/mean", exist_ok=True)
-os.makedirs(convert_path+"/diff", exist_ok=True)
-os.makedirs(convert_path+"/sample", exist_ok=True)
+# os.makedirs(convert_path+"/mean", exist_ok=True)
+# os.makedirs(convert_path+"/diff", exist_ok=True)
+# os.makedirs(convert_path+"/sample", exist_ok=True)
 
 latent_dim=8
 
@@ -100,9 +104,8 @@ for source_spk in spk_list:
     _, sp_m, sp_s, logf0_m, logf0_s = load_pickle(stat_path)
     STAT_DICT[source_spk] = (sp_m, sp_s, logf0_m, logf0_s)
     for target_spk in spk_list:
-        os.makedirs(os.path.join(convert_path, 'mean',source_spk+"_to_"+target_spk), exist_ok=True)
-        os.makedirs(os.path.join(convert_path, 'diff',source_spk+"_to_"+target_spk), exist_ok=True)
-        os.makedirs(os.path.join(convert_path, 'sample',source_spk+"_to_"+target_spk), exist_ok=True)
+        os.makedirs(os.path.join(convert_path, source_spk+"_to_"+target_spk), exist_ok=True)
+
 
 for (src_idx, source_spk) in SPK_DICT.items():
     print("Processing", source_spk)
@@ -138,9 +141,15 @@ for (src_idx, source_spk) in SPK_DICT.items():
                 one_hot_y = dm.make_spk_vector([tar_idx], TOTAL_SPK_NUM, 1)
 
                 with torch.no_grad():
+                    # if args.disentanglement=='AC':
+                    #     _, _,  _, y_prime_mu, _, y_prime, _ = VAE(x=src, one_hot_x=one_hot_x, y=y, one_hot_y=one_hot_y)
+                    #     _, _,  _, x_prime_mu, _, x_prime, _ = VAE(x=src, one_hot_x=one_hot_x, y=x, one_hot_y=one_hot_x)
+                    # else:
                     _, _,  _, y_prime_mu, _, y_prime = VAE(x=src, one_hot_src=one_hot_x , one_hot_tar=one_hot_y)
+                    # _, _,  _, x_prime_mu, _, x_prime = VAE(x=src, one_hot_src=one_hot_x , one_hot_tar=one_hot_x)
 
                 sp_m_t, sp_s_t, logf0_m_t, logf0_s_t = STAT_DICT[target_spk]
+                # mc_t = y_prime_mu.double().cpu().numpy()[0][0]
 
                 # mean as sample
                 mc_t_mean = y_prime_mu.double().cpu().numpy()[0][0]
@@ -176,7 +185,7 @@ for (src_idx, source_spk) in SPK_DICT.items():
                 wav_transformed_mean = world_speech_synthesis(f0=new_f0, decoded_sp=new_sp_mean, 
                     ap=ap, fs=sampling_rate, frame_period=frame_period)
                 wav_transformed_mean = np.nan_to_num(wav_transformed_mean)
-                soundfile.write(os.path.join(convert_path,'mean' ,source_spk+"_to_"+target_spk, utt_id+".wav"), wav_transformed_mean, sampling_rate)
+                soundfile.write(os.path.join(convert_path,source_spk+"_to_"+target_spk, utt_id+".wav"), wav_transformed_mean, sampling_rate)
 
                 # # diff as sample
                 # wav_transformed_diff = world_speech_synthesis(f0=new_f0, decoded_sp=new_sp_diff, 

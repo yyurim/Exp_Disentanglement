@@ -63,9 +63,18 @@ GAN : discriminator
 parser = argparse.ArgumentParser()
 parser.add_argument('--model_type', type=str) # VAE3 MD
 parser.add_argument('--SI', type=int, default=0)
+parser.add_argument('--si_path', type=str, default='pretrainSI/2000_si.pt')
+parser.add_argument('--si_lr_sch', type=int, default=True)
+
 parser.add_argument('--I', type=int, default=0)
+
 parser.add_argument('--LI', type=int, default=0)
+parser.add_argument('--li_path', type=str, default='pretrainLI/2000_li.pt')
+parser.add_argument('--li_lr_sch', type=int, default=True)
+
 parser.add_argument('--AC', type=int, default=0)
+parser.add_argument('--ac_path', type=str, default='pretrainAC/2000_ac.pt')
+
 parser.add_argument('--SC', type=int, default=0)
 parser.add_argument('--CC', type=int, default=0)
 parser.add_argument('--GAN', type=int, default=0)
@@ -84,6 +93,8 @@ parser.add_argument('--ws',type=int, default=1)
 parser.add_argument('--baseline',type=str, default='')
 parser.add_argument('--disentanglement', type=str, default='')
 
+parser.add_argument('--spk', type=str, default='')
+
 args = parser.parse_args()
 assert args.model_type in ["VAE1", "VAE2", "VAE3", "MD"]
 
@@ -99,10 +110,15 @@ if args.conf != "":
         conf = json.load(f)
     args.REC = conf["REC"]
     args.KL = conf["KL"]
+
     args.SI = conf["SI"]
+
     args.I = conf["I"]
+
     args.LI = conf["LI"]
+
     args.AC = conf["AC"]
+
     args.CC = conf["CC"]
     args.SC = conf["SC"]
     args.model_type = conf["model_type"]
@@ -111,9 +127,13 @@ if args.conf != "":
 
 
 # Data load
-SPK_LIST = ['VCC2SF1','VCC2SF2','VCC2SM1','VCC2SM2'] 
+if args.spk != "":
+    SPK_LIST = ['VCC2SF1','VCC2SF2','VCC2SM1','VCC2SM2','VCC2SF3','VCC2SF4','VCC2SM3','VCC2SM4'] 
+else:
+    SPK_LIST = ['VCC2SF1','VCC2SF2','VCC2SM1','VCC2SM2'] 
 # SPK_LIST = ['F1','M1','F2','M2']
 TOTAL_SPK_NUM = len(SPK_LIST)
+print("TOTAL SPK NUM >> ",TOTAL_SPK_NUM)
 
 PPG_DICT_TRAIN = {
     spk_id:load_ppg(os.path.join("data","train", spk_id)) 
@@ -167,17 +187,9 @@ c_lr = args.c_lr
 batch_size = 8
 
 
-
 ## Classifier
-is_conversion = True if (args.AC or args.SC or args.CC or args.GAN) else False
-is_classify = True if (args.SI or args.LI) else False
 is_adv = True if (args.SI or args.GAN or args.LI) else False
-is_revert = True if (args.SC or args.CC) else False
-is_pretrain = True if (args.AC) else False
 
-
-print("weight sharing ? ",args.ws)
-# exit()
 
 vae = model.VAE(style_dim=TOTAL_SPK_NUM, latent_dim=latent_dim, vae_type=args.model_type, weight_sharing=args.ws)
 vae.cuda()
@@ -186,38 +198,33 @@ vae_sch = optim.lr_scheduler.LambdaLR(optimizer=vae_opt, lr_lambda=lambda epoch:
 print(calc_parm_num(vae))
 print(vae)
 
-pretrained_si = False
-if os.path.isfile("pretrain_SI/500_si.pt"):
-    pretrained_si = True
 
 if args.SI:
     spk_C = model.LatentClassifier(latent_dim=latent_dim, label_num=TOTAL_SPK_NUM)
-    if pretrained_si:
-        spk_C.load_state_dict(torch.load("pretrain_SI/500_si.pt"))
+    spk_C.load_state_dict(torch.load(args.si_path))
     spk_C.cuda()
     spk_C_opt = optim.Adam(spk_C.parameters(), lr=c_lr)
     spk_C_sch = optim.lr_scheduler.LambdaLR(optimizer=spk_C_opt, lr_lambda=lambda epoch: c_lr*(-(1e-2/(args.epochs+500+1))*epoch+1e-2))
-
+    print("loaded SI model >> ",args.si_path)
     print(calc_parm_num(spk_C))
     print(spk_C)
 
-pretrained_li = False
-if os.path.isfile("pretrain_LI/2000_li.pt"):
-    pretrained_li = True
 
 if args.LI:
-    lang_C = model.LangClassifier(latent_dim=latent_dim, label_num=144)
+    lang_C = model.LangClassifier(latent_dim=latent_dim, label_num=144) 
+    lang_C.load_state_dict(torch.load(args.li_path))
     lang_C.cuda()
     lang_C_opt = optim.Adam(lang_C.parameters(), lr=c_lr)
-    lang_C_sch = optim.lr_scheduler.LambdaLR(optimizer=lang_C_opt, lr_lambda=lambda epoch: c_lr*(-(1e-2/(args.epochs+2000+1))*epoch+1e-2))
-
+    # lang_C_sch = optim.lr_scheduler.LambdaLR(optimizer=lang_C_opt, lr_lambda=lambda epoch: c_lr*(-(1e-2/(args.epochs+2000+1))*epoch+1e-2))
+    print("loaded LI model >> ",args.li_path)
     print(calc_parm_num(lang_C))
     print(lang_C)
     
 
 if args.AC:
     ac = model.DataClassifier(latent_dim=latent_dim, label_num=TOTAL_SPK_NUM)
-    ac.load_state_dict(torch.load('pretrain_AC/parm/2000_ac.pt'))
+    ac.load_state_dict(torch.load(args.ac_path))
+    print("loaded AC model >> ",args.ac_path)
     ac.cuda()
     ac.eval()
 
@@ -235,129 +242,6 @@ min_dev_loss = 9999999999999999
 min_epoch = 0
 d_epoch = 1
 
-if pretrained_si is False and args.SI:
-    pre_vae = model.VAE(style_dim=TOTAL_SPK_NUM, latent_dim=latent_dim, vae_type=args.model_type)
-    pre_vae.load_state_dict(torch.load(args.baseline))
-    pre_vae.cuda()
-    pre_vae.eval()
-
-    lm = LogManager()
-    lm.alloc_stat_type_list(["train_loss", "train_acc", "dev_loss", "dev_acc"])
-
-    for epoch in range(500+1):
-        lm.init_stat()  
-
-        spk_C.train()
-        train_loader = dm.feat_loader_single(SP_DICT_TRAIN, batch_size, shuffle=True)      
-        for self_idx, coded_mcep in train_loader:
-            
-            one_hot_self = dm.make_spk_vector(self_idx, TOTAL_SPK_NUM, batch_size, is_MD)
-            
-            total_loss = 0.0
-            z_mu, z_logvar, z, x_prime_mu, x_prime_logvar, x_prime = pre_vae(x=coded_mcep,one_hot_src=one_hot_self, one_hot_tar=one_hot_self)
-            
-            # Latent Classifier
-            self_vec = dm.make_spk_target(self_idx, batch_size, is_MD=False)
-            predicted_self = spk_C(z)
-            si_loss = nllloss(predicted_self, self_vec)
-            si_err = calc_err(predicted_self, self_vec)
-
-            spk_C_opt.zero_grad()
-            si_loss.backward()
-            spk_C_opt.step()
-
-            lm.add_torch_stat("train_loss", si_loss)
-            lm.add_torch_stat("train_acc", 1-si_err)
-
-        spk_C.eval()
-        dev_loader = dm.feat_loader_single(SP_DICT_DEV, batch_size, shuffle=True)      
-        for self_idx, coded_mcep in dev_loader:
-            
-            one_hot_self = dm.make_spk_vector(self_idx, TOTAL_SPK_NUM, batch_size, is_MD)
-            # one_hot_y = dm.make_spk_vector(tar_idx, TOTAL_SPK_NUM, batch_size, is_MD)
-            
-            total_loss = 0.0
-            z_mu, z_logvar, z, x_prime_mu, x_prime_logvar, x_prime = pre_vae(x=coded_mcep,one_hot_src=one_hot_self, one_hot_tar=one_hot_self)
-            
-            # Latent Classifier
-            self_vec = dm.make_spk_target(self_idx, batch_size, is_MD=False)
-            predicted_self = spk_C(z)
-            si_loss = nllloss(predicted_self, self_vec)
-            si_err = calc_err(predicted_self, self_vec)
-
-            spk_C_opt.zero_grad()
-            si_loss.backward()
-            spk_C_opt.step()
-
-            lm.add_torch_stat("dev_loss", si_loss)
-            lm.add_torch_stat("dev_acc", 1-si_err)
-        
-        print("SI Epoch: ",epoch,end=' / ')
-        lm.print_stat()
-        spk_C_sch.step()
-
-    os.makedirs("pretrain_SI",exist_ok=True)
-    torch.save(spk_C.state_dict(), "pretrain_SI/500_si.pt")
-
-
-if pretrained_li is False and args.LI:
-    pre_vae = model.VAE(style_dim=TOTAL_SPK_NUM, latent_dim=latent_dim, vae_type=args.model_type, weight_sharing=args.ws)
-    pre_vae.load_state_dict(torch.load(args.baseline))
-    pre_vae.cuda()
-    pre_vae.eval()
-
-    lm = LogManager()
-    lm.alloc_stat_type_list(["train_loss", "train_acc", "dev_loss", "dev_acc"])
-
-    for epoch in range(2000+1):
-        lm.init_stat()  
-
-        lang_C.train()
-        train_loader = dm.feat_loader_single(SP_DICT_TRAIN, batch_size, shuffle=True, ppg_dict=PPG_DICT_TRAIN)      
-        for self_idx, (coded_mcep,ppg_labs) in train_loader:
-            
-            one_hot_self = dm.make_spk_vector(self_idx, TOTAL_SPK_NUM, batch_size, is_MD)
-            
-            total_loss = 0.0
-            z_mu, z_logvar, z, x_prime_mu, x_prime_logvar, x_prime = pre_vae(x=coded_mcep,one_hot_src=one_hot_self, one_hot_tar=one_hot_self)
-            
-            li_z = lang_C(z)
-            li_loss = nllloss(li_z, ppg_labs, is_batch=True)
-            li_err = calc_err(li_z, ppg_labs, is_batch=True)
-
-            lang_C_opt.zero_grad()
-            li_loss.backward()
-            lang_C_opt.step()
-
-            lm.add_torch_stat("train_loss", li_loss)
-            lm.add_torch_stat("train_acc", 1-li_err)
-
-        lang_C.eval()
-        dev_loader = dm.feat_loader_single(SP_DICT_DEV, batch_size, shuffle=True, ppg_dict=PPG_DICT_DEV)      
-        for self_idx, (coded_mcep,ppg_labs) in dev_loader:
-            
-            one_hot_self = dm.make_spk_vector(self_idx, TOTAL_SPK_NUM, batch_size, is_MD)
-            
-            total_loss = 0.0
-            z_mu, z_logvar, z, x_prime_mu, x_prime_logvar, x_prime = pre_vae(x=coded_mcep,one_hot_src=one_hot_self, one_hot_tar=one_hot_self)
-            
-            li_z = lang_C(z)
-            li_loss = nllloss(li_z, ppg_labs, is_batch=True)
-            li_err = calc_err(li_z, ppg_labs, is_batch=True)
-
-            lang_C_opt.zero_grad()
-            li_loss.backward()
-            lang_C_opt.step()
-
-            lm.add_torch_stat("dev_loss", li_loss)
-            lm.add_torch_stat("dev_acc", 1-li_err)
-        
-        print("LI Epoch: ",epoch,end=' / ')
-        lm.print_stat()
-        lang_C_sch.step()
-
-    os.makedirs("pretrain_LI",exist_ok=True)
-    torch.save(lang_C.state_dict(), "pretrain_LI/2000_li.pt")
 
 
 lm = LogManager()
@@ -370,8 +254,8 @@ for epoch in range(epochs+1):
     print("EPOCH:   {}  LearningRate:   {}".format(epoch, vae_sch.get_last_lr()[0]),end='   ')
     if args.SI:
         print("SILearningRate:   {}".format(spk_C_sch.get_last_lr()[0]),end='   ')
-    if args.SI:
-        print("LILearningRate:   {}".format(lang_C_sch.get_last_lr()[0]),end='   ')
+    if args.LI:
+        print("LILearningRate:   {}".format(lang_C_opt.param_groups[0]['lr']),end='   ')
     print()
     
     batch_size = 8
@@ -659,8 +543,11 @@ for epoch in range(epochs+1):
 
     vae_sch.step()
 
-    if args.SI:
+    if args.SI and args.si_lr_sch:
         spk_C_sch.step()
+
+    if args.LI and args.li_lr_sch:
+        lang_C_sch.step()
     
     
     cur_loss = lm.get_stat("total_loss")
